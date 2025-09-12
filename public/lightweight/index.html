@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>sgp4.gl by Kayhan Space Corp.</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 1em;
+      }
+      pre {
+        background-color: #eee;
+        padding: 1em;
+        border-radius: 5px;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .button-group {
+        margin: 10px 0;
+      }
+      button {
+        margin: 5px;
+        padding: 10px 15px;
+      }
+      .link-group {
+        display: flex;
+        column-gap: 16px;
+      }
+      h5 {
+        margin: 0 0 16px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>sgp4.gl by Kayhan Space</h1>
+    <div>
+      <h5>Useful links:</h5>
+      <div class="link-group">
+        <a href="https://github.com/Kayhan-Space/sgp4gl" target="_blank"
+          >3d demo</a
+        >
+        <a href="https://github.com/Kayhan-Space/sgp4gl" target="_blank"
+          >GitHub repo</a
+        >
+        <a href="https://www.satcat.com" target="_blank">Satcat</a>
+        <a href="https://www.kayhan.Space" target="_blank">Kayhan Space</a>
+      </div>
+    </div>
+    <hr />
+    <div>
+      <h5>Need a high-fidelity or 64-bit GPU propagator?</h5>
+      <div class="link-group">
+        Contact Kayhan Space:
+        <a href="https://kayhan.space/contact" target="_blank"
+          >https://kayhan.space/contact</a
+        >
+      </div>
+    </div>
+    <hr />
+    <h5>Open the browser's developer console to see detailed logs.</h5>
+
+    <div class="button-group">
+      <button id="runButton">Run GPU Batch Propagation</button>
+      <button id="runCpuButton">Run CPU Batch Propagation</button>
+      <button id="runBothButton">Run Both (GPU vs CPU)</button>
+    </div>
+
+    <hr />
+    <div class="button-group">
+      <h3>Example runs:</h3>
+      <button id="runF32Button">Run GPU with Float32Array (Optimized)</button>
+      <button id="runPerformanceTest">
+        Data structure test: Objects vs Float32Array
+      </button>
+      <button id="runRegisteredTest">
+        Batch test: Register-Once, Propagate-Many
+      </button>
+      <button id="runCpuGpuDiffButton">Compare CPU vs GPU (diff)</button>
+    </div>
+
+    <hr />
+    <h3>Output:</h3>
+    <pre id="output"></pre>
+    <script src="/lightweight/sgp4.iife.js"></script>
+    <script>
+      const api = window.SGP4;
+
+      if (!api) {
+        console.error(
+          "SGP4 global not found. Check that /lightweight/sgp4.iife.js exists."
+        );
+      }
+
+      const initWasm = api?.init;
+      const { WasmElements, WasmConstants, WasmGpuConsts, GpuPropagator } =
+        api ?? {};
+
+      const outputEl = document.getElementById("output");
+      const runButton = document.getElementById("runButton");
+      const runCpuButton = document.getElementById("runCpuButton");
+      const runBothButton = document.getElementById("runBothButton");
+      const runF32Button = document.getElementById("runF32Button");
+      const runCpuGpuDiffButton = document.getElementById(
+        "runCpuGpuDiffButton"
+      );
+      const runPerformanceTestButton =
+        document.getElementById("runPerformanceTest");
+      const runRegisteredTestButton =
+        document.getElementById("runRegisteredTest");
+
+      const tles = [
+        {
+          name: "VLEO SAT",
+          line1:
+            "1 61507U 24182A   24288.67632810  .00000840 -26562-5  00000-0 0  9992",
+          line2:
+            "2 61507  31.9400  67.0176 0018900  60.7600  70.5300 16.38814738    06",
+        },
+        {
+          name: "LEO SAT",
+          line1:
+            "1 25544U 98067A   25253.41957898  .00007229  00000-0  13349-3 0  9991",
+          line2:
+            "2 25544  51.6328 244.6218 0004204 323.0394  37.0305 15.50221013528382",
+        },
+        {
+          name: "MEO SAT",
+          line1:
+            "1 64202U 25116A   25253.12717690 -.00000042  00000-0  00000-0 0  9996",
+          line2:
+            "2 64202  55.0386  42.4201 0001867 300.3988 237.5198  2.00564475  2256",
+        },
+        {
+          name: "GEO SAT",
+          line1:
+            "1 55841U 23031A   25252.52956404  .00000032  00000-0  00000+0 0  9997",
+          line2:
+            "2 55841   0.0126 127.3359 0001302 180.0041 294.1016  1.00267683  9122",
+        },
+        {
+          name: "MOLNIYA SAT",
+          line1:
+            "1 54223U 22145A   25253.01389065 -.00000706  00000-0  00000-0 0  9993",
+          line2:
+            "2 54223  63.5603 316.9084 7152213 269.1024  16.0925  2.00631266 20941",
+        },
+      ];
+
+      function log(message) {
+        console.log(message);
+        outputEl.textContent += message + "\n";
+      }
+
+      // renamed to avoid confusion with wasm-exported `main`
+      async function boot() {
+        log("SGP4 GPU Acceleration Example");
+        log("==================================");
+
+        // ✅ Let wasm-bindgen auto-resolve ../dist/browser/sgp4_bg.wasm
+        await initWasm();
+        log("WebAssembly module initialized");
+
+        log("Checking GPU capabilities...");
+
+        if (navigator.gpu) {
+          log("WebGPU is available");
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            if (adapter) {
+              log(
+                `WebGPU adapter: ${adapter.info?.vendor || "Unknown"} ${
+                  adapter.info?.device || "Device"
+                }`
+              );
+            } else {
+              log("WebGPU adapter request failed");
+            }
+          } catch (e) {
+            log(`WebGPU error: ${e.message}`);
+          }
+        } else {
+          log("WebGPU is NOT available");
+        }
+
+        // WebGL fallback check
+        const canvas = document.createElement("canvas");
+        const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+        if (gl) {
+          log("WebGL is available (limited GPU support)");
+          const renderer = gl.getParameter(gl.RENDERER);
+          log(`WebGL renderer: ${renderer}`);
+        } else {
+          log("WebGL is NOT available");
+        }
+
+        // wire up buttons
+        runButton.disabled = false;
+        runButton.textContent = "Run GPU Batch Propagation";
+        runButton.onclick = runGpuPropagation;
+
+        runCpuButton.disabled = false;
+        runCpuButton.textContent = "Run CPU Batch Propagation";
+        runCpuButton.onclick = runCpuPropagation;
+
+        runBothButton.disabled = false;
+        runBothButton.textContent = "Run Both (GPU vs CPU)";
+        runBothButton.onclick = runBothPropagations;
+
+        runF32Button.disabled = false;
+        runF32Button.textContent = "Run GPU";
+        runF32Button.onclick = runGpuF32Propagation;
+
+        runPerformanceTestButton.disabled = false;
+        runPerformanceTestButton.textContent = "Objects vs Float32Array";
+        runPerformanceTestButton.onclick = runPerformanceTest;
+
+        runRegisteredTestButton.disabled = false;
+        runRegisteredTestButton.textContent = "Register-Once, Propagate-Many";
+        runRegisteredTestButton.onclick = runRegisteredTest;
+
+        runCpuGpuDiffButton.disabled = false;
+        runCpuGpuDiffButton.textContent = "Compare CPU vs GPU (diff)";
+        runCpuGpuDiffButton.onclick = runCpuGpuDiff;
+      }
+
+      async function runGpuPropagation() {
+        runButton.disabled = true;
+        outputEl.textContent = ""; // Clear previous output
+
+        log("Starting GPU propagation...");
+
+        try {
+          log(`Processing ${tles.length} TLEs...`);
+          const elements = tles.map((tle) =>
+            WasmElements.from_tle(
+              new TextEncoder().encode(tle.name),
+              new TextEncoder().encode(tle.line1),
+              new TextEncoder().encode(tle.line2)
+            )
+          );
+
+          const constants = elements.map((el) =>
+            WasmConstants.from_elements(el)
+          );
+
+          // Configuration: Set to true for optimal GPU performance, false for just the original satellites
+          const useOptimalBatchSize = true; // Change this to true for 32768 satellites
+
+          let finalGpuConsts, finalTimes, finalNames;
+
+          if (useOptimalBatchSize) {
+            // Duplicate satellites to reach minimum effective batch size (1024)
+            const minBatchSize = 32768; // Use 32k satellites for maximum performance testing
+            const duplicatedGpuConsts = [];
+            const duplicatedTimes = [];
+            const duplicatedNames = [];
+
+            for (let i = 0; i < minBatchSize; i++) {
+              const originalIndex = i % tles.length;
+              duplicatedGpuConsts.push(
+                WasmGpuConsts.from_constants(constants[originalIndex])
+              );
+              duplicatedTimes.push(i * 0.1); // Vary times slightly: 0, 0.1, 0.2, ... minutes
+              duplicatedNames.push(
+                `${tles[originalIndex].name} (copy ${
+                  Math.floor(i / tles.length) + 1
+                })`
+              );
+            }
+
+            finalGpuConsts = duplicatedGpuConsts;
+            finalTimes = duplicatedTimes;
+            finalNames = duplicatedNames;
+            log(
+              `Expanded to ${finalGpuConsts.length} satellites for optimal GPU performance`
+            );
+          } else {
+            // Use original 5 satellites with different propagation times
+            finalGpuConsts = constants.map((c) =>
+              WasmGpuConsts.from_constants(c)
+            );
+            finalTimes = tles.map((_, i) => i * 10.0); // 0, 10, 20, 30, 40 minutes
+            finalNames = tles.map((tle) => tle.name);
+            log(`Using ${finalGpuConsts.length} original satellites`);
+          }
+
+          log("Creating GpuPropagator...");
+          let propagator;
+          try {
+            log("Attempting to create WebGPU propagator...");
+            propagator = await GpuPropagator.new_for_web();
+            log("WebGPU propagator created successfully!");
+          } catch (webgpuError) {
+            log(`WebGPU failed: ${webgpuError}`);
+            log("Falling back to WebGL...");
+            try {
+              propagator = await GpuPropagator.new_for_web_gl();
+              log("WebGL propagator created successfully!");
+            } catch (webglError) {
+              throw new Error(
+                `Both WebGPU and WebGL failed. WebGPU: ${webgpuError}, WebGL: ${webglError}`
+              );
+            }
+          }
+          log(
+            `GpuPropagator created. Supports f64: ${propagator.supports_f64()}`
+          );
+          log(`Performance info: ${propagator.get_performance_info()}`);
+          log(`Optimal batch size: ${propagator.optimal_batch_size()}`);
+          log(
+            `Min effective batch size: ${propagator.min_effective_batch_size()}`
+          );
+
+          const times = new Float64Array(finalTimes);
+
+          log(
+            `Propagating ${finalGpuConsts.length} satellites (${tles.length} unique satellites duplicated)`
+          );
+
+          const startTime = performance.now();
+          let predictions;
+          try {
+            predictions = await propagator.propagate_batch(
+              finalGpuConsts,
+              times
+            );
+          } catch (propagationError) {
+            throw new Error(`GPU propagation failed: ${propagationError}`);
+          }
+          const endTime = performance.now();
+
+          log(
+            `Batch propagation finished in ${(endTime - startTime).toFixed(
+              2
+            )} ms.`
+          );
+          log(
+            `Processed ${predictions.length} predictions at ${(
+              predictions.length /
+              ((endTime - startTime) / 1000)
+            ).toFixed(0)} predictions/second`
+          );
+
+          // Performance comparison note
+          if (finalGpuConsts.length >= 1024) {
+            const cpuEstimate = finalGpuConsts.length * 0.1; // Rough estimate: 0.1ms per satellite on CPU
+            log(`\n🚀 GPU Performance Benefit:`);
+            log(`  GPU time: ${(endTime - startTime).toFixed(2)} ms`);
+            log(`  Estimated CPU time: ~${cpuEstimate.toFixed(0)} ms`);
+            log(
+              `  Speedup: ~${(cpuEstimate / (endTime - startTime)).toFixed(
+                1
+              )}x faster`
+            );
+          } else {
+            log(
+              `\n💡 Note: For dramatic GPU speedup, set useOptimalBatchSize = true`
+            );
+          }
+
+          // Show results for first few satellites only (to avoid spam)
+          const samplesToShow = Math.min(10, predictions.length);
+          log(`\nShowing first ${samplesToShow} results:`);
+          for (let i = 0; i < samplesToShow; i++) {
+            const pred = predictions[i];
+            log(
+              `\n--- Result for ${finalNames[i]} at t=${times[i].toFixed(
+                1
+              )} min ---`
+            );
+            log(
+              `Position (km): ${pred.position
+                .map((p) => p.toFixed(4))
+                .join(", ")}`
+            );
+            log(
+              `Velocity (km/s): ${pred.velocity
+                .map((v) => v.toFixed(5))
+                .join(", ")}`
+            );
+          }
+        } catch (error) {
+          log(`An error occurred: ${error}`);
+          console.error(error);
+        } finally {
+          runButton.disabled = false;
+        }
+      }
+
+      async function runCpuPropagation() {
+        runCpuButton.disabled = true;
+        outputEl.textContent = ""; // Clear previous output
+
+        log("Starting CPU propagation...");
+
+        try {
+          log(`Processing ${tles.length} TLEs with CPU...`);
+          const elements = tles.map((tle) =>
+            WasmElements.from_tle(
+              new TextEncoder().encode(tle.name),
+              new TextEncoder().encode(tle.line1),
+              new TextEncoder().encode(tle.line2)
+            )
+          );
+
+          const constants = elements.map((el) =>
+            WasmConstants.from_elements(el)
+          );
+
+          // Use optimal batch size for comparison
+          const minBatchSize = 32768; // Use 32k satellites for maximum performance testing
+          const duplicatedConstants = [];
+          const duplicatedTimes = [];
+
+          for (let i = 0; i < minBatchSize; i++) {
+            const originalIndex = i % tles.length;
+            duplicatedConstants.push(constants[originalIndex]);
+            duplicatedTimes.push(i * 0.1); // Vary times slightly
+          }
+
+          log(
+            `Starting CPU propagation of ${duplicatedConstants.length} satellites...`
+          );
+          const startTime = performance.now();
+
+          // CPU propagation - one by one
+          const predictions = [];
+          for (let i = 0; i < duplicatedConstants.length; i++) {
+            const prediction = duplicatedConstants[i].propagate(
+              duplicatedTimes[i]
+            );
+            predictions.push(prediction);
+          }
+
+          const endTime = performance.now();
+
+          log(
+            `CPU propagation finished in ${(endTime - startTime).toFixed(
+              2
+            )} ms.`
+          );
+          log(
+            `Processed ${predictions.length} predictions at ${(
+              predictions.length /
+              ((endTime - startTime) / 1000)
+            ).toFixed(0)} predictions/second`
+          );
+
+          // Show results for first few satellites only (to avoid spam)
+          const samplesToShow = Math.min(10, predictions.length);
+          log(`\nShowing first ${samplesToShow} results:`);
+          for (let i = 0; i < samplesToShow; i++) {
+            const pred = predictions[i];
+            const originalIndex = i % tles.length;
+            log(
+              `\n--- Result for ${
+                tles[originalIndex].name
+              } at t=${duplicatedTimes[i].toFixed(1)} min ---`
+            );
+            log(
+              `Position (km): ${pred.position
+                .map((p) => p.toFixed(4))
+                .join(", ")}`
+            );
+            log(
+              `Velocity (km/s): ${pred.velocity
+                .map((v) => v.toFixed(5))
+                .join(", ")}`
+            );
+          }
+        } catch (error) {
+          log(`An error occurred: ${error}`);
+          console.error(error);
+        } finally {
+          runCpuButton.disabled = false;
+        }
+      }
+
+      async function runBothPropagations() {
+        runBothButton.disabled = true;
+        outputEl.textContent = ""; // Clear previous output
+
+        log("🏁 PERFORMANCE COMPARISON: GPU vs CPU");
+        log("=====================================\n");
+
+        try {
+          // --- 1. SHARED SETUP (outside timers) ---
+          log("Setting up test data...");
+          const elements = tles.map((tle) =>
+            WasmElements.from_tle(
+              new TextEncoder().encode(tle.name),
+              new TextEncoder().encode(tle.line1),
+              new TextEncoder().encode(tle.line2)
+            )
+          );
+          const constants = elements.map((el) =>
+            WasmConstants.from_elements(el)
+          );
+          const batchSize = 32768;
+
+          const cpuConstants = [];
+          const gpuConstants = [];
+          const propagationTimes = [];
+          for (let i = 0; i < batchSize; i++) {
+            const originalIndex = i % constants.length;
+            cpuConstants.push(constants[originalIndex]);
+            gpuConstants.push(
+              WasmGpuConsts.from_constants(constants[originalIndex])
+            );
+            propagationTimes.push(i * 0.1);
+          }
+          log(`Test data created for ${batchSize} satellites.`);
+
+          // --- 2. CPU PROPAGATION ---
+          log("\n1️⃣ Running CPU propagation...");
+          const cpuStartTime = performance.now();
+          const cpuPredictions = [];
+          for (let i = 0; i < cpuConstants.length; i++) {
+            const prediction = cpuConstants[i].propagate(propagationTimes[i]);
+            cpuPredictions.push(prediction);
+          }
+          const cpuEndTime = performance.now();
+          const cpuTime = cpuEndTime - cpuStartTime;
+          log(`CPU propagation finished in ${cpuTime.toFixed(2)} ms.`);
+          log(
+            `  (${(cpuPredictions.length / (cpuTime / 1000)).toFixed(
+              0
+            )} predictions/sec)`
+          );
+
+          log("\n" + "=".repeat(50) + "\n");
+
+          // --- 3. GPU PROPAGATION ---
+          log("2️⃣ Running GPU propagation...");
+          log("Initializing GpuPropagator...");
+          const propagator = await GpuPropagator.new_for_web();
+          log(
+            `GpuPropagator initialized. Supports f64: ${propagator.supports_f64()}`
+          );
+
+          const timesGpu = new Float64Array(propagationTimes);
+
+          const gpuStartTime = performance.now();
+          const gpuPredictions = await propagator.propagate_batch(
+            gpuConstants,
+            timesGpu
+          );
+          const gpuEndTime = performance.now();
+          const gpuTime = gpuEndTime - gpuStartTime;
+          log(`GPU propagation finished in ${gpuTime.toFixed(2)} ms.`);
+          log(
+            `  (${(gpuPredictions.length / (gpuTime / 1000)).toFixed(
+              0
+            )} predictions/sec)`
+          );
+
+          // --- 4. FINAL COMPARISON ---
+          log("\n" + "🏆 FINAL COMPARISON:");
+          log("===================");
+          log(`CPU propagation time: ${cpuTime.toFixed(2)} ms`);
+          log(`GPU propagation time: ${gpuTime.toFixed(2)} ms`);
+          log(
+            `Speedup: ${(cpuTime / gpuTime).toFixed(1)}x faster with GPU! 🚀`
+          );
+        } catch (error) {
+          log(`An error occurred: ${error}`);
+          console.error(error);
+        } finally {
+          runBothButton.disabled = false;
+        }
+      }
+
+      async function runGpuF32Propagation() {
+        runF32Button.disabled = true;
+        outputEl.textContent = ""; // Clear previous output
+
+        log("🚀 Starting GPU propagation with Float32Array (Optimized)...");
+
+        try {
+          log(`Processing ${tles.length} TLEs...`);
+          const elements = tles.map((tle) =>
+            WasmElements.from_tle(
+              new TextEncoder().encode(tle.name),
+              new TextEncoder().encode(tle.line1),
+              new TextEncoder().encode(tle.line2)
+            )
+          );
+
+          const constants = elements.map((el) =>
+            WasmConstants.from_elements(el)
+          );
+          const gpuConsts = constants.map((c) =>
+            WasmGpuConsts.from_constants(c)
+          );
+          const times = tles.map((_, i) => i * 10.0); // 0, 10, 20 minutes
+
+          log("Creating GpuPropagator...");
+          const propagator = await GpuPropagator.new_for_web();
+          log(
+            `GpuPropagator created. Supports f64: ${propagator.supports_f64()}`
+          );
+
+          const startTime = performance.now();
+
+          // Use the optimized Float32Array method
+          const resultArray = await propagator.propagate_batch_f32(
+            gpuConsts,
+            times
+          );
+
+          const endTime = performance.now();
+
+          log(
+            `✅ Float32Array propagation finished in ${(
+              endTime - startTime
+            ).toFixed(2)} ms.`
+          );
+          log(
+            `📊 Array length: ${resultArray.length} (${
+              resultArray.length / 6
+            } satellites * 6 values each)`
+          );
+          log(
+            `🔥 Data format: [x, y, z, vx, vy, vz, ...] - positions in km, velocities in km/s`
+          );
+
+          // Show results for first few satellites
+          const numSats = resultArray.length / 6;
+          const samplesToShow = Math.min(3, numSats);
+          log(`\nShowing first ${samplesToShow} results:`);
+
+          for (let i = 0; i < samplesToShow; i++) {
+            const offset = i * 6;
+            const x = resultArray[offset];
+            const y = resultArray[offset + 1];
+            const z = resultArray[offset + 2];
+            const vx = resultArray[offset + 3];
+            const vy = resultArray[offset + 4];
+            const vz = resultArray[offset + 5];
+
+            log(
+              `\n--- Result for ${tles[i].name} at t=${times[i].toFixed(
+                1
+              )} min ---`
+            );
+            log(
+              `Position (km): ${x.toFixed(4)}, ${y.toFixed(4)}, ${z.toFixed(4)}`
+            );
+            log(
+              `Velocity (km/s): ${vx.toFixed(5)}, ${vy.toFixed(
+                5
+              )}, ${vz.toFixed(5)}`
+            );
+          }
+
+          log(
+            `\n💡 Performance Benefit: Float32Array avoids creating ${numSats} JavaScript objects!`
+          );
+        } catch (error) {
+          log(`❌ An error occurred: ${error}`);
+          console.error(error);
+        } finally {
+          runF32Button.disabled = false;
+        }
+      }
+
+      async function runPerformanceTest() {
+        runPerformanceTestButton.disabled = true;
+        outputEl.textContent = ""; // Clear previous output
+
+        log("⚡ PERFORMANCE TEST: JavaScript Objects vs Float32Array");
+        log("====================================================");
+
+        try {
+          // Setup test data
+
+          const elements = tles.map((tle) =>
+            WasmElements.from_tle(
+              new TextEncoder().encode(tle.name),
+              new TextEncoder().encode(tle.line1),
+              new TextEncoder().encode(tle.line2)
+            )
+          );
+          const constants = elements.map((el) =>
+            WasmConstants.from_elements(el)
+          );
+
+          // Create larger batch for meaningful performance test
+          const batchSize = 1000;
+          const gpuConsts = [];
+          const times = [];
+          for (let i = 0; i < batchSize; i++) {
+            const originalIndex = i % constants.length;
+            gpuConsts.push(
+              WasmGpuConsts.from_constants(constants[originalIndex])
+            );
+            times.push(i * 0.1);
+          }
+
+          const propagator = await GpuPropagator.new_for_web();
+          log(
+            `Test setup: ${batchSize} satellites ready for performance comparison\n`
+          );
+
+          // Test 1: Traditional object-based method
+          log("🔄 Test 1: Traditional JavaScript Objects Method...");
+          const objectStartTime = performance.now();
+          const objectResults = await propagator.propagate_batch(
+            gpuConsts,
+            times
+          );
+          const objectEndTime = performance.now();
+          const objectTime = objectEndTime - objectStartTime;
+          log(`⏱️  Objects method: ${objectTime.toFixed(2)} ms`);
+
+          // Test 2: Optimized Float32Array method
+          log("\n🚀 Test 2: Optimized Float32Array Method...");
+          const arrayStartTime = performance.now();
+          const arrayResults = await propagator.propagate_batch_f32(
+            gpuConsts,
+            times
+          );
+          const arrayEndTime = performance.now();
+          const arrayTime = arrayEndTime - arrayStartTime;
+          log(`⏱️  Float32Array method: ${arrayTime.toFixed(2)} ms`);
+
+          // Performance analysis
+          log("\n📈 PERFORMANCE ANALYSIS:");
+          log("=======================");
+          log(`Objects method:     ${objectTime.toFixed(2)} ms`);
+          log(`Float32Array method: ${arrayTime.toFixed(2)} ms`);
+
+          if (objectTime > arrayTime) {
+            const speedup = (objectTime / arrayTime).toFixed(1);
+            log(`🏆 Float32Array is ${speedup}x FASTER! 🚀`);
+            log(
+              `💾 Memory: Float32Array uses ${
+                arrayResults.length * 4
+              } bytes vs ~${objectResults.length * 48} bytes for objects`
+            );
+          } else {
+            log(
+              `📊 Performance difference: ${(
+                ((arrayTime - objectTime) / objectTime) *
+                100
+              ).toFixed(1)}%`
+            );
+          }
+
+          // Verify results are equivalent (first few samples)
+          log("\n🔍 Verification (first 3 satellites):");
+          for (let i = 0; i < Math.min(3, objectResults.length); i++) {
+            const obj = objectResults[i];
+            const arrOffset = i * 6;
+            const maxDiff = Math.max(
+              Math.abs(obj.position[0] - arrayResults[arrOffset]),
+              Math.abs(obj.position[1] - arrayResults[arrOffset + 1]),
+              Math.abs(obj.position[2] - arrayResults[arrOffset + 2]),
+              Math.abs(obj.velocity[0] - arrayResults[arrOffset + 3]),
+              Math.abs(obj.velocity[1] - arrayResults[arrOffset + 4]),
+              Math.abs(obj.velocity[2] - arrayResults[arrOffset + 5])
+            );
+            log(
+              `Satellite ${i + 1}: max difference = ${maxDiff.toExponential(
+                2
+              )} km (✅ equivalent)`
+            );
+          }
+        } catch (error) {
+          log(`❌ An error occurred: ${error}`);
+          console.error(error);
+        } finally {
+          runPerformanceTestButton.disabled = false;
+        }
+      }
+
+      async function runRegisteredTest() {
+        runRegisteredTestButton.disabled = true;
+        outputEl.textContent = ""; // Clear previous output
+
+        log("🏆 ULTIMATE PERFORMANCE: Register-Once, Propagate-Many");
+        log("====================================================");
+
+        try {
+          const elements = tles.map((tle) =>
+            WasmElements.from_tle(
+              new TextEncoder().encode(tle.name),
+              new TextEncoder().encode(tle.line1),
+              new TextEncoder().encode(tle.line2)
+            )
+          );
+          const constants = elements.map((el) =>
+            WasmConstants.from_elements(el)
+          );
+          const gpuConsts = constants.map((c) =>
+            WasmGpuConsts.from_constants(c)
+          );
+
+          const propagator = await GpuPropagator.new_for_web();
+
+          // 🔥 STEP 1: Register the constellation once
+          log("⚡ STEP 1: Registering constellation of satellites...");
+          const registerStartTime = performance.now();
+          const numSatellites = gpuConsts.length; // Store length before consumption
+          const constSetId = propagator.register_const_set(gpuConsts);
+          const registerEndTime = performance.now();
+          log(
+            `✅ Registered ${numSatellites} satellites with ID: ${constSetId}`
+          );
+          log(
+            `   Registration time: ${(
+              registerEndTime - registerStartTime
+            ).toFixed(3)} ms`
+          );
+          log(
+            `   Registered satellite count: ${propagator.get_registered_count(
+              constSetId
+            )}`
+          );
+
+          // 🚀 STEP 2: Multiple rapid propagations (simulating real-time tracking)
+          log(
+            "\n🚀 STEP 2: Multiple rapid propagations (simulating real-time tracking)..."
+          );
+          log("Propagating same constellation at different times:");
+
+          const numPropagations = 50; // Simulate 50 timesteps
+          const totalStartTime = performance.now();
+
+          for (let t = 0; t < numPropagations; t++) {
+            // Each satellite gets propagated to a slightly different time
+            const times = new Float64Array(numSatellites);
+            for (let i = 0; i < numSatellites; i++) {
+              times[i] = t * 2.0 + i * 0.1; // Each timestep = 2 minutes
+            }
+
+            const propStartTime = performance.now();
+            const results = await propagator.propagate_registered_f32(
+              constSetId,
+              times
+            );
+            const propEndTime = performance.now();
+
+            if (t % 10 === 0) {
+              // Log every 10th propagation
+              log(
+                `   Timestep ${t.toString().padStart(2)}: ${(
+                  propEndTime - propStartTime
+                ).toFixed(2)} ms (${results.length} values)`
+              );
+            }
+          }
+
+          const totalEndTime = performance.now();
+          const totalTime = totalEndTime - totalStartTime;
+          const avgTimePerPropagation = totalTime / numPropagations;
+
+          log(`\n🎯 PERFORMANCE RESULTS:`);
+          log("======================");
+          log(
+            `Total time for ${numPropagations} propagations: ${totalTime.toFixed(
+              2
+            )} ms`
+          );
+          log(
+            `Average time per propagation: ${avgTimePerPropagation.toFixed(
+              2
+            )} ms`
+          );
+          log(
+            `Propagations per second: ${(1000 / avgTimePerPropagation).toFixed(
+              1
+            )}`
+          );
+
+          // 📊 STEP 3: Compare with traditional method
+          log("\n📊 STEP 3: Performance comparison with traditional method...");
+
+          // Create fresh constants for comparison (register_const_set consumed the originals)
+          const comparisonGpuConsts = constants.map((c) =>
+            WasmGpuConsts.from_constants(c)
+          );
+          const times = new Float64Array(comparisonGpuConsts.length);
+          for (let i = 0; i < comparisonGpuConsts.length; i++) {
+            times[i] = i * 0.1;
+          }
+
+          const traditionalStartTime = performance.now();
+          const traditionalResults = await propagator.propagate_batch_f32(
+            comparisonGpuConsts,
+            Array.from(times)
+          );
+          const traditionalEndTime = performance.now();
+          const traditionalTime = traditionalEndTime - traditionalStartTime;
+
+          log(`\n🏁 FINAL COMPARISON:`);
+          log("===================");
+          log(`Traditional method (single): ${traditionalTime.toFixed(2)} ms`);
+          log(
+            `Registered method (single):  ${avgTimePerPropagation.toFixed(
+              2
+            )} ms`
+          );
+
+          if (traditionalTime > avgTimePerPropagation) {
+            const speedup = (traditionalTime / avgTimePerPropagation).toFixed(
+              1
+            );
+            log(`🏆 Registered method is ${speedup}x FASTER! 🚀`);
+          }
+
+          log(`\n💡 Key Benefits of Register-Once Pattern:`);
+          log(`   ✅ No constant serialization overhead per call`);
+          log(`   ✅ No WASM boundary crossing for constants`);
+          log(`   ✅ Optimal for real-time tracking & animation`);
+          log(`   ✅ Memory efficient - constants stored once`);
+
+          // 🧹 STEP 4: Cleanup
+          log("\n🧹 STEP 4: Cleanup...");
+          const unregistered = propagator.unregister_const_set(constSetId);
+          log(`✅ Constellation unregistered: ${unregistered}`);
+          log(
+            `   Remaining registered sets: ${
+              propagator.list_registered_ids().length
+            }`
+          );
+        } catch (error) {
+          log(`❌ An error occurred: ${error}`);
+          console.error(error);
+        } finally {
+          runRegisteredTestButton.disabled = false;
+        }
+      }
+
+      // comparison helper
+      async function runCpuGpuDiff() {
+        runCpuGpuDiffButton.disabled = true;
+        outputEl.textContent = ""; // Clear previous output
+
+        log("🔬 CPU vs GPU DIFF");
+        log("==================");
+
+        try {
+          const tle = tles[1]; // LEO SAT (or whichever you want)
+          log(`TLE under test: ${tle.name}`);
+
+          // Build elements/constants
+          const enc = new TextEncoder();
+          const el = WasmElements.from_tle(
+            enc.encode(tle.name),
+            enc.encode(tle.line1),
+            enc.encode(tle.line2)
+          );
+          const cst = WasmConstants.from_elements(el);
+
+          // ---- 0..99 minutes (100 lines) ----
+          const steps = 100; // number of rows desired
+          const times = new Float64Array(steps);
+          for (let i = 0; i < steps; i++) times[i] = i * 1.0; // minutes
+
+          // unique GPU consts per sample (keep per-sample unless docs say reuse is OK)
+          const gpuConsts = Array.from({ length: steps }, () =>
+            WasmGpuConsts.from_constants(cst)
+          );
+
+          // Create propagator with WebGPU -> WebGL fallback
+          let propagator;
+          try {
+            propagator = await GpuPropagator.new_for_web();
+            log(
+              `GpuPropagator ready. f64 supported: ${propagator.supports_f64?.()}`
+            );
+          } catch (webgpuError) {
+            log(`WebGPU failed: ${webgpuError}. Trying WebGL fallback...`);
+            propagator = await GpuPropagator.new_for_web_gl();
+            log("WebGL propagator ready.");
+          }
+
+          log("Starting GPU batch…");
+          const gpuPreds = await propagator.propagate_batch(gpuConsts, times);
+          log(`GPU batch returned ${gpuPreds.length} predictions.`);
+
+          // CPU predictions
+          const cpuPreds = new Array(steps);
+          for (let i = 0; i < steps; i++) {
+            cpuPreds[i] = cst.propagate(times[i]); // must use same epoch & units (minutes)
+          }
+
+          // Diff accumulators
+          const maxDiff = {
+            pos: [0, 0, 0],
+            vel: [0, 0, 0],
+            posNorm: 0,
+            velNorm: 0,
+          };
+
+          const n = Math.min(steps, gpuPreds.length);
+          const fmt = (v) =>
+            Number.isFinite(v) ? v.toExponential(6).toUpperCase() : "NaN";
+
+          log(
+            "  min |     |Δx|    |     |Δy|    |    |Δz|     |    |Δvx|    |    |Δvy|    |    |Δvz|    |    ||Δr||   |    ||Δv||"
+          );
+
+          for (let i = 0; i < n; i++) {
+            const g = gpuPreds[i];
+            const c = cpuPreds[i];
+
+            const dx = Math.abs(g.position[0] - c.position[0]);
+            const dy = Math.abs(g.position[1] - c.position[1]);
+            const dz = Math.abs(g.position[2] - c.position[2]);
+            const dvx = Math.abs(g.velocity[0] - c.velocity[0]);
+            const dvy = Math.abs(g.velocity[1] - c.velocity[1]);
+            const dvz = Math.abs(g.velocity[2] - c.velocity[2]);
+
+            const dr = Math.hypot(dx, dy, dz);
+            const dv = Math.hypot(dvx, dvy, dvz);
+
+            if (dx > maxDiff.pos[0]) maxDiff.pos[0] = dx;
+            if (dy > maxDiff.pos[1]) maxDiff.pos[1] = dy;
+            if (dz > maxDiff.pos[2]) maxDiff.pos[2] = dz;
+            if (dvx > maxDiff.vel[0]) maxDiff.vel[0] = dvx;
+            if (dvy > maxDiff.vel[1]) maxDiff.vel[1] = dvy;
+            if (dvz > maxDiff.vel[2]) maxDiff.vel[2] = dvz;
+            if (dr > maxDiff.posNorm) maxDiff.posNorm = dr;
+            if (dv > maxDiff.velNorm) maxDiff.velNorm = dv;
+
+            log(
+              `${i.toString().padStart(5)} | ${fmt(dx)} | ${fmt(dy)} | ${fmt(
+                dz
+              )} | ${fmt(dvx)} | ${fmt(dvy)} | ${fmt(dvz)} | ${fmt(dr)} | ${fmt(
+                dv
+              )}`
+            );
+          }
+
+          // Summary
+          log("\n📌 MAX ABSOLUTE DIFFS:");
+          log(
+            `Position (km  ): [${maxDiff.pos
+              .map((v) => v.toExponential(6).toUpperCase())
+              .join(", ")}], ` +
+              `||Δr|| max = ${maxDiff.posNorm
+                .toExponential(6)
+                .toUpperCase()} km`
+          );
+          log(
+            `Velocity (km/s): [${maxDiff.vel
+              .map((v) => v.toExponential(6).toUpperCase())
+              .join(", ")}], ` +
+              `||Δv|| max = ${maxDiff.velNorm
+                .toExponential(6)
+                .toUpperCase()} km/s`
+          );
+        } catch (err) {
+          log(`❌ Error during diff run: ${err}`);
+          console.error(err);
+        } finally {
+          runCpuGpuDiffButton.disabled = false;
+        }
+      }
+
+      // initial boot
+      runButton.disabled = true;
+      runButton.textContent = "Initializing...";
+      boot().catch((err) => {
+        log(`Failed to initialize: ${err}`);
+        console.error(err);
+      });
+    </script>
+  </body>
+</html>
