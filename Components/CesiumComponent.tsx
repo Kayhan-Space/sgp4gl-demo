@@ -118,7 +118,7 @@ export const CesiumComponent: React.FC<{
     viewer.clock.currentTime = CesiumJs.JulianDate.clone(
       viewer.clock.startTime
     );
-    viewer.clock.multiplier = 0;
+    viewer.clock.multiplier = 300;
 
     viewer.scene.screenSpaceCameraController.minimumZoomDistance =
       6378135 + 500000;
