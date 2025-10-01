@@ -85,6 +85,9 @@ export const CesiumComponent: React.FC<{
   React.useEffect(() => {
     if (cesiumViewer.current || !cesiumContainerRef.current) return;
 
+    CesiumJs.Ion.defaultAccessToken = process.env
+      .NEXT_PUBLIC_CESIUM_TOKEN as string;
+
     cesiumViewer.current = new CesiumJs.Viewer(cesiumContainerRef.current, {
       maximumRenderTimeChange: Infinity,
       shadows: false,
@@ -102,6 +105,8 @@ export const CesiumComponent: React.FC<{
         ),
         {}
       ),
+      skyBox: false,
+      useBrowserRecommendedResolution: true,
     });
 
     const viewer = cesiumViewer.current;
@@ -124,6 +129,17 @@ export const CesiumComponent: React.FC<{
       6378135 + 500000;
     viewer.scene.screenSpaceCameraController.maximumZoomDistance = 0.5e9;
     viewer.scene.globe.enableLighting = true;
+
+    viewer.scene.skyBox = new CesiumJs.SkyBox({
+      sources: {
+        positiveX: `/cesiumAssets/skybox/realistic/3840/px.webp`,
+        negativeX: `/cesiumAssets/skybox/realistic/3840/nx.webp`,
+        positiveY: `/cesiumAssets/skybox/realistic/3840/py.webp`,
+        negativeY: `/cesiumAssets/skybox/realistic/3840/ny.webp`,
+        positiveZ: `/cesiumAssets/skybox/realistic/3840/pz.webp`,
+        negativeZ: `/cesiumAssets/skybox/realistic/3840/nz.webp`,
+      },
+    });
   }, [CesiumJs]);
 
   // ——— GPU init + TLE ingestion (mirrors CPU "load once" guard) ———
