@@ -47,8 +47,11 @@ Cesium is configured to use an external tile provider.
 Set the following environment variable in `.env.local`:
 
 ```bash
+NEXT_PUBLIC_CESIUM_TOKEN=<your_cesium_token>
 NEXT_PUBLIC_TILES_URL=<your_tile_provider_url>
 ```
+
+You can get your own tokens here [https://cesium.com/learn/ion/cesium-ion-access-tokens/](https://cesium.com/learn/ion/cesium-ion-access-tokens/)
 
 ### Cesium File Requirements
 
